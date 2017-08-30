@@ -139,6 +139,9 @@ public class WithContainerStep extends AbstractStepImpl {
                     throw new AbortException("The docker version is less than v1.7. Pipeline functions requiring 'docker exec' (e.g. 'docker.inside') or SELinux labeling will not work.");
                 } else if (dockerVersion.isOlderThan(new VersionNumber("1.8"))) {
                     listener.error("The docker version is less than v1.8. Running a 'docker.inside' from inside a container will not work.");
+                } else if (dockerVersion.isOlderThan(new VersionNumber("1.13"))) {
+                    if (!launcher.isUnix())
+                        listener.error("The docker version is less than v1.13. Running a 'docker.inside' from inside a Windows container will not work.");
                 }
             } else {
                 listener.error("Failed to parse docker version. Please note there is a minimum docker version requirement of v1.7.");
@@ -176,7 +179,7 @@ public class WithContainerStep extends AbstractStepImpl {
                 volumes.put(tmp, tmp);
             }
 
-            container = dockerClient.run(env, step.image, step.args, ws, volumes, volumesFromContainers, envReduced, dockerClient.whoAmI(), /* expected to hang until killed */ "cat");
+            container = dockerClient.run(env, step.image, step.args, ws, volumes, volumesFromContainers, envReduced);
             DockerFingerprints.addRunFacet(dockerClient.getContainerRecord(env, container), run);
             ImageAction.add(step.image, run);
             getContext().newBodyInvoker().
@@ -224,7 +227,7 @@ public class WithContainerStep extends AbstractStepImpl {
                     } catch (InterruptedException x) {
                         throw new IOException(x);
                     }
-                    List<String> prefix = new ArrayList<>(Arrays.asList(executable, "exec", container, "env"));
+                    List<String> prefix = launcher.isUnix() ? new ArrayList<>(Arrays.asList(executable, "exec", container, "env")) : new ArrayList<>(Arrays.asList(executable, "exec"));
                     if (ws != null) {
                         FilePath cwd = starter.pwd();
                         if (cwd != null) {
@@ -236,7 +239,20 @@ public class WithContainerStep extends AbstractStepImpl {
                     } // otherwise we are loading an old serialized Decorator
                     Set<String> envReduced = new TreeSet<String>(Arrays.asList(starter.envs()));
                     envReduced.removeAll(Arrays.asList(envHost));
-                    prefix.addAll(envReduced);
+
+                    if(launcher.isUnix())
+                    {
+                        prefix.addAll(envReduced);
+                    }
+                    else
+                    {
+                        for (String env : envReduced) {
+                            prefix.add("-e");
+                            prefix.add(env);
+                        }
+                        prefix.add(container);
+                    }
+
                     // Adapted from decorateByPrefix:
                     starter.cmds().addAll(0, prefix);
                     if (starter.masks() != null) {
